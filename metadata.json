@@ -1,0 +1,5 @@
+{
+  "name": "NTA JEE Mock Test Interface",
+  "description": "A high-fidelity replica of the National Testing Agency (NTA) JEE Main computer-based test interface, featuring a question palette, status indicators, and timer.",
+  "requestFramePermissions": []
+}
