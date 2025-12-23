@@ -57,20 +57,22 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
         - 10 MCQs (Single Correct)
         - 5 Numerical Answer Types (NAT)
         
+        SYLLABUS DEPTH:
+        - Physics: Mechanics, Optics, Modern Physics.
+        - Chemistry: Organic Mechanisms, Inorganic Bonding.
+        - Math: Calculus, Vectors, 3D.
+
         FORMATTING:
         - Use LaTeX for ALL math/units ($ for inline, $$ for block).
-        - Difficulty: Mixed.
+        - Difficulty: Mixed (EASY, MEDIUM, HARD).
         
-        Return JSON following this structure:
-        {
-          "mcqs": [{"text": "...", "options": ["...", "...", "...", "..."], "correctAnswer": "0-3", "difficulty": "EASY|MEDIUM|HARD"}],
-          "nats": [{"text": "...", "correctAnswer": "value", "difficulty": "EASY|MEDIUM|HARD"}]
-        }`;
+        Return JSON following the specified schema.`;
 
         const response = await ai.models.generateContent({
-          model: 'gemini-2.5-flash-preview',
+          model: 'gemini-3-flash-preview',
           contents: prompt,
           config: {
+            systemInstruction: "You are an expert exam architect. Generate high-quality mock test questions in JSON format.",
             responseMimeType: "application/json",
             responseSchema: {
               type: Type.OBJECT,
