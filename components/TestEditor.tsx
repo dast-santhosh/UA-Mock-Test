@@ -38,7 +38,7 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
     setIsGenerating(true);
     
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey: AIzaSyBdmm58juT-4EL5Vc78sXhtqNZ8dsxvq8c });
       let allQuestions: Question[] = [];
       let currentGlobalId = 1;
 
