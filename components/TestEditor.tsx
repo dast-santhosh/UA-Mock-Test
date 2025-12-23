@@ -10,8 +10,7 @@ interface Props {
 
 type PaperType = 'PAPER_1' | 'PAPER_2';
 
-// OpenRouter Configuration
-const OPENROUTER_API_KEY = "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";
+// OpenRouter Configuration using injected API Key
 const OPENROUTER_MODEL = "xiaomi/mimo-v2-flash:free";
 
 const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
@@ -24,117 +23,116 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationStatus, setGenerationStatus] = useState("");
   const [paperType, setPaperType] = useState<PaperType>('PAPER_1');
-  const [selectedSubjects, setSelectedSubjects] = useState<string[]>(['Physics', 'Chemistry', 'Mathematics']);
+  // Constraint: One subject at once
+  const [selectedSubject, setSelectedSubject] = useState<string>('Physics');
 
   const subjectsOptions = paperType === 'PAPER_1' 
     ? ['Physics', 'Chemistry', 'Mathematics']
     : ['Mathematics', 'Aptitude', 'Drawing/Planning'];
 
-  const handleSubjectToggle = (sub: string) => {
-    setSelectedSubjects(prev => 
-      prev.includes(sub) ? prev.filter(s => s !== sub) : [...prev, sub]
-    );
+  const cleanJson = (text: string) => {
+    // Strips markdown code blocks if present
+    const match = text.match(/\{[\s\S]*\}/);
+    return match ? match[0] : text;
   };
 
-  const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
+  const fetchFullSubject = async (subject: string): Promise<any> => {
+    const prompt = `Generate a full JEE Main standard test set for ${subject}. 
+    Requirements:
+    1. Exactly 30 questions in total.
+    2. Exactly 20 Multiple Choice Questions (Section A).
+    3. Exactly 10 Numerical Answer Type (NAT) questions (Section B).
+    4. Use LaTeX for ALL mathematical expressions, chemical formulas, and units ($ for inline, $$ for block).
+    5. Difficulty: A balanced mix of EASY, MEDIUM, and HARD.
+    6. Ensure questions are original and scientifically accurate.
+    
+    Response MUST be ONLY a JSON object with this exact structure:
+    {
+      "mcqs": [
+        { "text": "...", "options": ["A", "B", "C", "D"], "correctAnswer": "0", "difficulty": "MEDIUM" }
+      ],
+      "nats": [
+        { "text": "...", "correctAnswer": "25.5", "difficulty": "HARD" }
+      ]
+    }`;
 
-  const fetchBatch = async (prompt: string, retries = 3): Promise<any> => {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.API_KEY}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": window.location.origin,
+        "X-Title": "Apex JEE Mock Architect"
+      },
+      body: JSON.stringify({
+        model: OPENROUTER_MODEL,
+        messages: [
+          {
+            role: "system",
+            content: "You are an elite NTA JEE Main subject matter expert. You output only high-quality, valid JSON containing 30 questions per subject in one single response. No conversational text."
+          },
+          { role: "user", content: prompt }
+        ],
+        // Using high max_tokens to accommodate 30 questions in one response
+        max_tokens: 4096,
+        response_format: { type: "json_object" }
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData?.error?.message || `Synthesis engine error (${response.status})`);
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) throw new Error("Empty response from synthesis engine.");
+    
     try {
-      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": window.location.origin,
-          "X-Title": "Apex JEE Mock Architect"
-        },
-        body: JSON.stringify({
-          model: OPENROUTER_MODEL,
-          messages: [
-            {
-              role: "system",
-              content: `You are an expert NTA JEE Main exam creator. 
-              Generate high-quality, scientifically accurate questions. 
-              Always use LaTeX for math/formulas ($ for inline, $$ for block).
-              Return ONLY valid JSON. 
-              JSON Schema: { "questions": [ { "text": "...", "options": ["A", "B", "C", "D"], "correctAnswer": "0", "difficulty": "MEDIUM", "type": "MCQ" } ] }.
-              For MCQ: correctAnswer must be a string "0", "1", "2", or "3". 
-              For NAT: correctAnswer must be a numeric string.`
-            },
-            { role: "user", content: prompt }
-          ],
-          response_format: { type: "json_object" }
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData?.error?.message || `API Error: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      const content = data.choices[0]?.message?.content;
-      return JSON.parse(content || '{"questions":[]}');
-    } catch (error: any) {
-      if (retries > 0) {
-        console.warn(`Batch failed, retrying... (${retries} left)`, error);
-        await delay(3000);
-        return fetchBatch(prompt, retries - 1);
-      }
-      throw error;
+      return JSON.parse(cleanJson(content));
+    } catch (e) {
+      console.error("JSON Parse Error. Raw content:", content);
+      throw new Error("Failed to parse synthesis data. The response was malformed.");
     }
   };
 
   const generateAI = async () => {
-    if (selectedSubjects.length === 0) return alert("Please select at least one subject.");
-    
     setIsGenerating(true);
-    let allQuestions: Question[] = [];
     let currentGlobalId = 1;
 
     try {
-      for (const sub of selectedSubjects) {
-        // NTA JEE Requirement: 30 questions per subject
-        // 20 MCQs (Section A) + 10 NATs (Section B)
-        // We split into 3 batches of 10 to ensure JSON reliability and context limits
-        
-        const subBatches = [
-          { type: 'MCQ', count: 10, section: 'A' as const, label: "Batch 1/3 (10 MCQs)" },
-          { type: 'MCQ', count: 10, section: 'A' as const, label: "Batch 2/3 (10 MCQs)" },
-          { type: 'NAT', count: 10, section: 'B' as const, label: "Batch 3/3 (10 NATs)" }
-        ];
+      setGenerationStatus(`Synthesizing 30 questions for ${selectedSubject}...`);
+      
+      const data = await fetchFullSubject(selectedSubject);
+      
+      const subMcqs = (data.mcqs || []).slice(0, 20).map((q: any) => ({
+        ...q,
+        id: currentGlobalId++,
+        subject: selectedSubject as any,
+        type: QuestionType.MCQ,
+        section: 'A',
+        difficulty: q.difficulty as QuestionDifficulty || QuestionDifficulty.MEDIUM
+      }));
 
-        for (const batch of subBatches) {
-          setGenerationStatus(`Synthesizing ${sub}: ${batch.label}...`);
-          
-          const prompt = `Generate exactly 10 original ${batch.type} questions for JEE Main level ${sub}. 
-          Current Batch: ${batch.label}. 
-          Difficulty: Balanced mix of EASY, MEDIUM, HARD.
-          Instructions: Rigorous concepts, no duplicates. Use LaTeX for formulas.`;
+      const subNats = (data.nats || []).slice(0, 10).map((q: any) => ({
+        ...q,
+        id: currentGlobalId++,
+        subject: selectedSubject as any,
+        type: QuestionType.NAT,
+        section: 'B',
+        difficulty: q.difficulty as QuestionDifficulty || QuestionDifficulty.MEDIUM
+      }));
 
-          const data = await fetchBatch(prompt);
-          const batchQs = (data.questions || []).map((q: any) => ({
-            ...q,
-            id: currentGlobalId++,
-            subject: sub as any,
-            type: q.type === 'NAT' || batch.type === 'NAT' ? QuestionType.NAT : QuestionType.MCQ,
-            section: batch.section,
-            difficulty: q.difficulty as QuestionDifficulty || QuestionDifficulty.MEDIUM
-          }));
+      const finalQs = [...subMcqs, ...subNats];
+      
+      if (finalQs.length === 0) throw new Error("Synthesis yielded zero questions.");
 
-          allQuestions = [...allQuestions, ...batchQs];
-          await delay(2000); // Small delay to prevent burst throttling on free models
-        }
-      }
-
-      if (allQuestions.length === 0) throw new Error("No questions were generated. Check API status.");
-
-      setQuestions(allQuestions);
-      setName(name || `JEE Ultra Mock - ${new Date().toLocaleDateString()}`);
+      setQuestions(finalQs);
+      setName(name || `JEE Power Mock - ${selectedSubject}`);
       setShowAIModal(false);
     } catch (e: any) {
       console.error("Synthesis Failure:", e);
-      alert(`Synthesis Interrupted: ${e.message}. Try reducing selected subjects.`);
+      alert(`Synthesis Error: ${e.message}`);
     } finally {
       setIsGenerating(false);
       setGenerationStatus("");
@@ -160,7 +158,7 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
 
   return (
     <div className="flex flex-col h-screen bg-gray-50 overflow-hidden">
-      <header className="bg-[#0b3c66] text-white p-4 shadow-xl flex justify-between items-center z-50 shrink-0">
+      <header className="bg-[#0b3c66] text-white p-4 shadow-xl flex justify-between items-center z-40 shrink-0">
         <div className="flex items-center gap-4">
           <button onClick={onCancel} className="bg-white/10 p-2 rounded hover:bg-white/20 transition-all">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
@@ -176,7 +174,7 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
             onClick={() => setShowAIModal(true)}
             className="bg-[#9c27b0] hover:bg-[#7b1fa2] text-white px-6 py-2 rounded text-[11px] font-black uppercase shadow-lg flex items-center gap-2 transition-all active:scale-95 border-b-4 border-purple-900"
           >
-            ⚡ OpenRouter Synthesis
+            ⚡ AI Synthesis
           </button>
           <button 
             onClick={() => {
@@ -317,16 +315,25 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
                 <button onClick={() => setPaperType('PAPER_2')} className={`p-5 rounded-3xl border-2 transition-all font-bold uppercase text-[10px] tracking-widest ${paperType === 'PAPER_2' ? 'border-[#337ab7] bg-blue-50 shadow-md text-[#337ab7]' : 'border-gray-100 text-gray-400'}`}>Architecture (Paper 2)</button>
               </div>
 
-              <div className="grid grid-cols-1 gap-3">
-                {subjectsOptions.map(sub => (
-                  <label key={sub} className="flex items-center justify-between p-5 bg-gray-50 rounded-2xl cursor-pointer hover:bg-white transition-all border-2 border-transparent has-[:checked]:border-[#337ab7] has-[:checked]:bg-blue-50">
-                    <div className="flex flex-col">
-                      <span className="text-sm font-black text-[#0b3c66]">{sub}</span>
-                      <span className="text-[9px] font-bold text-gray-400 uppercase">30 Question Batch</span>
-                    </div>
-                    <input type="checkbox" checked={selectedSubjects.includes(sub)} onChange={() => handleSubjectToggle(sub)} className="w-6 h-6 accent-[#337ab7]" />
-                  </label>
-                ))}
+              <div>
+                <label className="block text-[11px] font-black text-gray-400 uppercase mb-3 tracking-widest">Select Subject for Generation</label>
+                <div className="grid grid-cols-1 gap-3">
+                  {subjectsOptions.map(sub => (
+                    <button 
+                      key={sub}
+                      onClick={() => setSelectedSubject(sub)}
+                      className={`flex items-center justify-between p-5 rounded-2xl border-2 transition-all ${selectedSubject === sub ? 'border-[#337ab7] bg-blue-50 shadow-sm' : 'border-gray-100 text-gray-400 hover:border-blue-100'}`}
+                    >
+                      <div className="flex flex-col text-left">
+                        <span className={`text-sm font-black ${selectedSubject === sub ? 'text-[#0b3c66]' : 'text-gray-400'}`}>{sub}</span>
+                        <span className="text-[9px] font-bold opacity-60 uppercase">30 Question Monolithic Set</span>
+                      </div>
+                      <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${selectedSubject === sub ? 'border-[#337ab7] bg-[#337ab7]' : 'border-gray-200'}`}>
+                        {selectedSubject === sub && <div className="w-2 h-2 bg-white rounded-full"></div>}
+                      </div>
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div className="space-y-4">
@@ -347,7 +354,7 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
               </div>
               
               <p className="text-[8px] font-bold text-gray-400 uppercase text-center leading-relaxed">
-                Powered by OpenRouter xiaomi/mimo-v2-flash:free. Generating 30 questions per subject (90 total for PCM).
+                Synthesis uses OpenRouter (Mimo-v2). 20 MCQs and 10 NATs will be generated in a single API call.
               </p>
             </div>
           </div>
