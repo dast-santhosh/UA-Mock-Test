@@ -35,10 +35,19 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
 
   const generateAI = async () => {
     if (selectedSubjects.length === 0) return alert("Select at least one subject.");
+    
+    // Check for API Key presence before initializing to prevent "An API Key must be set" error
+    const apiKey = process.env.API_KEY;
+    if (!apiKey) {
+      alert("Critical Error: API_KEY is missing from the environment. Ensure you have configured it correctly in your deployment settings.");
+      return;
+    }
+
     setIsGenerating(true);
     
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      // Re-initialize AI client with the verified key
+      const ai = new GoogleGenAI({ apiKey });
       let allQuestions: Question[] = [];
       let currentGlobalId = 1;
 
@@ -130,7 +139,7 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
       alert(`Synthesis complete. ${allQuestions.length} professional-grade JEE items generated with LaTeX coverage.`);
     } catch (e) {
       console.error("AI Generation Error:", e);
-      alert("Neural synthesis failed. Verify your API Key and internet stability.");
+      alert("Neural synthesis failed. Please verify your API Key and internet connectivity.");
     } finally {
       setIsGenerating(false);
     }
@@ -303,13 +312,13 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
           <div className="bg-white w-full max-w-2xl rounded-[2.5rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300 flex flex-col max-h-[90vh]">
             <div className="bg-[#337ab7] p-8 text-white flex justify-between items-center shrink-0">
               <h3 className="font-black text-2xl uppercase tracking-tighter">AI Synthesis Tool</h3>
-              <button onClick={() => setShowAIModal(false)} className="bg-white/10 hover:bg-white/20 p-3 rounded-full">×</button>
+              <button onClick={() => setShowAIModal(false)} className="bg-white/10 hover:bg-white/20 p-3 rounded-full text-2xl leading-none">×</button>
             </div>
             
             <div className="p-10 space-y-8 overflow-y-auto custom-scrollbar">
               <div className="grid grid-cols-2 gap-4">
-                <button onClick={() => setPaperType('PAPER_1')} className={`p-5 rounded-3xl border-2 transition-all ${paperType === 'PAPER_1' ? 'border-[#337ab7] bg-blue-50 shadow-md' : 'border-gray-100'}`}>B.E. / B.Tech</button>
-                <button onClick={() => setPaperType('PAPER_2')} className={`p-5 rounded-3xl border-2 transition-all ${paperType === 'PAPER_2' ? 'border-[#337ab7] bg-blue-50 shadow-md' : 'border-gray-100'}`}>B.Arch / B.Plan</button>
+                <button onClick={() => setPaperType('PAPER_1')} className={`p-5 rounded-3xl border-2 transition-all font-bold uppercase text-xs tracking-widest ${paperType === 'PAPER_1' ? 'border-[#337ab7] bg-blue-50 shadow-md text-[#337ab7]' : 'border-gray-100 text-gray-400'}`}>B.E. / B.Tech</button>
+                <button onClick={() => setPaperType('PAPER_2')} className={`p-5 rounded-3xl border-2 transition-all font-bold uppercase text-xs tracking-widest ${paperType === 'PAPER_2' ? 'border-[#337ab7] bg-blue-50 shadow-md text-[#337ab7]' : 'border-gray-100 text-gray-400'}`}>B.Arch / B.Plan</button>
               </div>
 
               <div className="grid grid-cols-1 gap-3">
@@ -325,7 +334,12 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
               </div>
 
               <button onClick={generateAI} disabled={isGenerating} className={`w-full py-6 rounded-3xl text-white font-black uppercase tracking-[0.2em] shadow-2xl transition-all ${isGenerating ? 'bg-gray-400 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-700'}`}>
-                {isGenerating ? 'Synthesizing Neural Matrix...' : 'Launch AI Architect'}
+                {isGenerating ? (
+                  <div className="flex items-center justify-center gap-4">
+                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    Synthesizing Neural Matrix...
+                  </div>
+                ) : 'Launch AI Architect'}
               </button>
             </div>
           </div>
