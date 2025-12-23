@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { GoogleGenAI, Type } from "@google/genai";
 import { Exam, Question, QuestionType, QuestionDifficulty } from '../types';
 import LatexRenderer from './LatexRenderer';
 
@@ -10,9 +11,6 @@ interface Props {
 
 type PaperType = 'PAPER_1' | 'PAPER_2';
 
-// OpenRouter Configuration using injected API Key
-const OPENROUTER_MODEL = "xiaomi/mimo-v2-flash:free";
-
 const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
   const [name, setName] = useState(exam?.name || '');
   const [duration, setDuration] = useState(exam?.durationMinutes || 180);
@@ -23,88 +21,74 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationStatus, setGenerationStatus] = useState("");
   const [paperType, setPaperType] = useState<PaperType>('PAPER_1');
-  // Constraint: One subject at once
   const [selectedSubject, setSelectedSubject] = useState<string>('Physics');
 
   const subjectsOptions = paperType === 'PAPER_1' 
     ? ['Physics', 'Chemistry', 'Mathematics']
     : ['Mathematics', 'Aptitude', 'Drawing/Planning'];
 
-  const cleanJson = (text: string) => {
-    // Strips markdown code blocks if present
-    const match = text.match(/\{[\s\S]*\}/);
-    return match ? match[0] : text;
-  };
-
-  const fetchFullSubject = async (subject: string): Promise<any> => {
-    const prompt = `Generate a full JEE Main standard test set for ${subject}. 
-    Requirements:
-    1. Exactly 30 questions in total.
-    2. Exactly 20 Multiple Choice Questions (Section A).
-    3. Exactly 10 Numerical Answer Type (NAT) questions (Section B).
-    4. Use LaTeX for ALL mathematical expressions, chemical formulas, and units ($ for inline, $$ for block).
-    5. Difficulty: A balanced mix of EASY, MEDIUM, and HARD.
-    6. Ensure questions are original and scientifically accurate.
-    
-    Response MUST be ONLY a JSON object with this exact structure:
-    {
-      "mcqs": [
-        { "text": "...", "options": ["A", "B", "C", "D"], "correctAnswer": "0", "difficulty": "MEDIUM" }
-      ],
-      "nats": [
-        { "text": "...", "correctAnswer": "25.5", "difficulty": "HARD" }
-      ]
-    }`;
-
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${process.env.API_KEY}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": window.location.origin,
-        "X-Title": "Apex JEE Mock Architect"
-      },
-      body: JSON.stringify({
-        model: OPENROUTER_MODEL,
-        messages: [
-          {
-            role: "system",
-            content: "You are an elite NTA JEE Main subject matter expert. You output only high-quality, valid JSON containing 30 questions per subject in one single response. No conversational text."
-          },
-          { role: "user", content: prompt }
-        ],
-        // Using high max_tokens to accommodate 30 questions in one response
-        max_tokens: 4096,
-        response_format: { type: "json_object" }
-      })
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData?.error?.message || `Synthesis engine error (${response.status})`);
-    }
-
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content;
-    if (!content) throw new Error("Empty response from synthesis engine.");
-    
-    try {
-      return JSON.parse(cleanJson(content));
-    } catch (e) {
-      console.error("JSON Parse Error. Raw content:", content);
-      throw new Error("Failed to parse synthesis data. The response was malformed.");
-    }
-  };
-
   const generateAI = async () => {
     setIsGenerating(true);
-    let currentGlobalId = 1;
-
+    setGenerationStatus(`Initializing Deepmind AI for ${selectedSubject}...`);
+    
     try {
-      setGenerationStatus(`Synthesizing 30 questions for ${selectedSubject}...`);
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       
-      const data = await fetchFullSubject(selectedSubject);
-      
+      const prompt = `Generate a comprehensive JEE Main monolithic test set for ${selectedSubject}.
+      REQUIREMENTS:
+      1. Exactly 30 questions total.
+      2. First 20 are Multiple Choice (Section A).
+      3. Next 10 are Numerical Answer Type (Section B).
+      4. Standard: High-rigor NTA JEE Main level (Concepts like calculus, mechanics, organic synthesis, etc.).
+      5. LaTeX: Mandatory for all mathematical expressions, symbols, and chemical formulas ($ for inline, $$ for block).
+      6. Output: Strictly JSON mapping to the requested schema.`;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.0-flash',
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              mcqs: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    text: { type: Type.STRING, description: "Question statement with LaTeX" },
+                    options: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Exactly 4 options with LaTeX" },
+                    correctAnswer: { type: Type.STRING, description: "Index of correct option (0, 1, 2, or 3)" },
+                    difficulty: { type: Type.STRING, enum: ["EASY", "MEDIUM", "HARD"] }
+                  },
+                  required: ["text", "options", "correctAnswer", "difficulty"]
+                }
+              },
+              nats: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    text: { type: Type.STRING, description: "Question statement with LaTeX" },
+                    correctAnswer: { type: Type.STRING, description: "Numeric value as string" },
+                    difficulty: { type: Type.STRING, enum: ["EASY", "MEDIUM", "HARD"] }
+                  },
+                  required: ["text", "correctAnswer", "difficulty"]
+                }
+              }
+            },
+            required: ["mcqs", "nats"]
+          }
+        }
+      });
+
+      setGenerationStatus("Processing synthesized data...");
+      const rawJson = response.text;
+      if (!rawJson) throw new Error("Synthesis failed: Empty response from Deepmind AI");
+
+      const data = JSON.parse(rawJson);
+      let currentGlobalId = 1;
+
       const subMcqs = (data.mcqs || []).slice(0, 20).map((q: any) => ({
         ...q,
         id: currentGlobalId++,
@@ -125,13 +109,15 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
 
       const finalQs = [...subMcqs, ...subNats];
       
-      if (finalQs.length === 0) throw new Error("Synthesis yielded zero questions.");
+      if (finalQs.length === 0) {
+        throw new Error("Deepmind AI failed to generate any questions.");
+      }
 
       setQuestions(finalQs);
-      setName(name || `JEE Power Mock - ${selectedSubject}`);
+      setName(name || `JEE Mock - ${selectedSubject}`);
       setShowAIModal(false);
     } catch (e: any) {
-      console.error("Synthesis Failure:", e);
+      console.error("Deepmind AI Synthesis Failure:", e);
       alert(`Synthesis Error: ${e.message}`);
     } finally {
       setIsGenerating(false);
@@ -172,9 +158,9 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
         <div className="flex gap-4">
           <button 
             onClick={() => setShowAIModal(true)}
-            className="bg-[#9c27b0] hover:bg-[#7b1fa2] text-white px-6 py-2 rounded text-[11px] font-black uppercase shadow-lg flex items-center gap-2 transition-all active:scale-95 border-b-4 border-purple-900"
+            className="bg-[#337ab7] hover:bg-[#286090] text-white px-6 py-2 rounded text-[11px] font-black uppercase shadow-lg flex items-center gap-2 transition-all active:scale-95 border-b-4 border-[#1e4b7a]"
           >
-            ⚡ AI Synthesis
+            ⚡ Deepmind AI Synthesis
           </button>
           <button 
             onClick={() => {
@@ -305,7 +291,7 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#0b3c66]/90 backdrop-blur-md p-6">
           <div className="bg-white w-full max-w-lg rounded-[2.5rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300 flex flex-col max-h-[90vh]">
             <div className="bg-[#337ab7] p-8 text-white flex justify-between items-center shrink-0">
-              <h3 className="font-black text-2xl uppercase tracking-tighter">AI Synthesis (Mimo-v2)</h3>
+              <h3 className="font-black text-2xl uppercase tracking-tighter">Deepmind AI Synthesis</h3>
               <button onClick={() => setShowAIModal(false)} className="bg-white/10 hover:bg-white/20 p-3 rounded-full text-2xl leading-none">×</button>
             </div>
             
@@ -316,7 +302,7 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
               </div>
 
               <div>
-                <label className="block text-[11px] font-black text-gray-400 uppercase mb-3 tracking-widest">Select Subject for Generation</label>
+                <label className="block text-[11px] font-black text-gray-400 uppercase mb-3 tracking-widest">Select Subject (Monolithic 30 Qs)</label>
                 <div className="grid grid-cols-1 gap-3">
                   {subjectsOptions.map(sub => (
                     <button 
@@ -326,7 +312,7 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
                     >
                       <div className="flex flex-col text-left">
                         <span className={`text-sm font-black ${selectedSubject === sub ? 'text-[#0b3c66]' : 'text-gray-400'}`}>{sub}</span>
-                        <span className="text-[9px] font-bold opacity-60 uppercase">30 Question Monolithic Set</span>
+                        <span className="text-[9px] font-bold opacity-60 uppercase">Full Subject Set (20 MCQ + 10 NAT)</span>
                       </div>
                       <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${selectedSubject === sub ? 'border-[#337ab7] bg-[#337ab7]' : 'border-gray-200'}`}>
                         {selectedSubject === sub && <div className="w-2 h-2 bg-white rounded-full"></div>}
@@ -337,13 +323,13 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
               </div>
 
               <div className="space-y-4">
-                <button onClick={generateAI} disabled={isGenerating} className={`w-full py-6 rounded-3xl text-white font-black uppercase tracking-[0.2em] shadow-2xl transition-all ${isGenerating ? 'bg-gray-400 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-700'}`}>
+                <button onClick={generateAI} disabled={isGenerating} className={`w-full py-6 rounded-3xl text-white font-black uppercase tracking-[0.2em] shadow-2xl transition-all ${isGenerating ? 'bg-gray-400 cursor-not-allowed' : 'bg-[#0b3c66] hover:bg-[#1e4b7a]'}`}>
                   {isGenerating ? (
                     <div className="flex items-center justify-center gap-4">
                       <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                      Generating...
+                      Synthesizing...
                     </div>
-                  ) : 'Launch Synthesis'}
+                  ) : 'Launch Deepmind AI'}
                 </button>
                 
                 {generationStatus && (
@@ -354,7 +340,7 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
               </div>
               
               <p className="text-[8px] font-bold text-gray-400 uppercase text-center leading-relaxed">
-                Synthesis uses OpenRouter (Mimo-v2). 20 MCQs and 10 NATs will be generated in a single API call.
+                Synthesis powered by Deepmind AI (Flash v2.0). Generates 20 Section A and 10 Section B questions in a single monolithic pass.
               </p>
             </div>
           </div>
