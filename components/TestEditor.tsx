@@ -1,6 +1,7 @@
 
 import React, { useState } from 'react';
 import { Exam, Question, QuestionType, QuestionDifficulty } from '../types';
+import { GoogleGenAI, Type } from "@google/genai";
 import LatexRenderer from './LatexRenderer';
 
 interface Props {
@@ -32,24 +33,9 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
     );
   };
 
-  // Helper for exponential backoff retries to handle OpenRouter rate limits or transient errors
-  const fetchWithRetry = async (fn: () => Promise<Response>, retries = 3, delay = 2000): Promise<Response> => {
-    const res = await fn();
-    if (res.status === 429 && retries > 0) {
-      await new Promise(resolve => setTimeout(resolve, delay));
-      return fetchWithRetry(fn, retries - 1, delay * 2);
-    }
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.error?.message || `API Error: ${res.status}`);
-    }
-    return res;
-  };
-
   const generateAI = async () => {
     if (selectedSubjects.length === 0) return alert("Select at least one subject.");
     
-    // Using process.env.API_KEY as the centralized secret source
     const apiKey = process.env.API_KEY;
     if (!apiKey) {
       alert("System Error: API_KEY environment variable is not defined.");
@@ -59,56 +45,68 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
     setIsGenerating(true);
     
     try {
+      const ai = new GoogleGenAI({ apiKey });
       let allQuestions: Question[] = [];
       let currentGlobalId = 1;
 
       for (const sub of selectedSubjects) {
-        const prompt = `Act as an elite Subject Matter Expert for the NTA JEE Main Examination. 
-        Synthesize a rigorous set of exactly 30 questions for the subject: ${sub}.
+        const prompt = `Act as an elite NTA JEE Main Paper Architect. 
+        Synthesize a rigorous set of exactly 15 questions for the subject: ${sub}.
         
-        PATTERN REQUIREMENTS:
-        - SECTION A: 20 Multiple Choice Questions (Single Correct). 
-        - SECTION B: 10 Numerical Answer Types (NAT).
+        PATTERN:
+        - 10 MCQs (Single Correct)
+        - 5 Numerical Answer Types (NAT)
         
-        SYLLABUS DEPTH:
-        - MATHEMATICS: Emphasize Calculus (Differential/Integral), Vectors, 3D Geometry, and Probability.
-        - PHYSICS: Focus on Mechanics, Electrodynamics, Modern Physics, and Thermodynamics.
-        - CHEMISTRY: Focus on Organic Synthesis Mechanisms, Chemical Bonding, and Equilibrium.
+        FORMATTING:
+        - Use LaTeX for ALL math/units ($ for inline, $$ for block).
+        - Difficulty: Mixed.
         
-        FORMATTING RULES:
-        - LATEX: Use LaTeX for ALL mathematical symbols, units, and equations ($ for inline, $$ for block).
-        - DIFFICULTY: Distribution of 20% Easy, 60% Medium, 20% Hard.
-        - OUTPUT: Strictly JSON.
-        
-        JSON SCHEMA:
+        Return JSON following this structure:
         {
           "mcqs": [{"text": "...", "options": ["...", "...", "...", "..."], "correctAnswer": "0-3", "difficulty": "EASY|MEDIUM|HARD"}],
-          "nats": [{"text": "...", "correctAnswer": "numerical_value", "difficulty": "EASY|MEDIUM|HARD"}]
+          "nats": [{"text": "...", "correctAnswer": "value", "difficulty": "EASY|MEDIUM|HARD"}]
         }`;
 
-        const response = await fetchWithRetry(() => 
-          fetch("https://openrouter.ai/api/v1/chat/completions", {
-            method: "POST",
-            headers: {
-              "Authorization": `Bearer ${apiKey}`,
-              "Content-Type": "application/json",
-              "HTTP-Referer": window.location.origin,
-              "X-Title": "NTA Mock Test Architect",
-            },
-            body: JSON.stringify({
-              "model": "xiaomi/mimo-v2-flash:free",
-              "messages": [
-                { "role": "system", "content": "You are a specialized exam generator. Always output valid JSON." },
-                { "role": "user", "content": prompt }
-              ],
-              "response_format": { "type": "json_object" }
-            })
-          })
-        );
+        const response = await ai.models.generateContent({
+          model: 'gemini-2.5-flash-preview',
+          contents: prompt,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                mcqs: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      text: { type: Type.STRING },
+                      options: { type: Type.ARRAY, items: { type: Type.STRING }, minItems: 4, maxItems: 4 },
+                      correctAnswer: { type: Type.STRING },
+                      difficulty: { type: Type.STRING, enum: ["EASY", "MEDIUM", "HARD"] }
+                    },
+                    required: ["text", "options", "correctAnswer", "difficulty"]
+                  }
+                },
+                nats: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      text: { type: Type.STRING },
+                      correctAnswer: { type: Type.STRING },
+                      difficulty: { type: Type.STRING, enum: ["EASY", "MEDIUM", "HARD"] }
+                    },
+                    required: ["text", "correctAnswer", "difficulty"]
+                  }
+                }
+              },
+              required: ["mcqs", "nats"]
+            }
+          }
+        });
 
-        const result = await response.json();
-        const content = result.choices[0].message.content;
-        const data = JSON.parse(content || '{}');
+        const data = JSON.parse(response.text || '{}');
         
         const subMcqs = (data.mcqs || []).map((q: any) => ({
           ...q,
@@ -130,12 +128,11 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
       }
 
       setQuestions(allQuestions);
-      setName(name || `JEE-MAIN Full Mock - ${new Date().toLocaleDateString('en-IN')}`);
+      setName(name || `JEE Mock - ${new Date().toLocaleDateString()}`);
       setShowAIModal(false);
-      alert(`Successfully synthesized ${allQuestions.length} questions across ${selectedSubjects.length} subjects.`);
     } catch (e: any) {
-      console.error("OpenRouter Synthesis Fault:", e);
-      alert(`Synthesis failed: ${e.message || "Unknown error"}. Please verify your API configuration.`);
+      console.error("AI Fault:", e);
+      alert(`Synthesis failed: ${e.message}.`);
     } finally {
       setIsGenerating(false);
     }
@@ -322,7 +319,7 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
                   <label key={sub} className="flex items-center justify-between p-5 bg-gray-50 rounded-2xl cursor-pointer hover:bg-white transition-all border-2 border-transparent has-[:checked]:border-[#337ab7] has-[:checked]:bg-blue-50">
                     <div className="flex flex-col">
                       <span className="text-sm font-black text-[#0b3c66]">{sub}</span>
-                      <span className="text-[9px] font-bold text-gray-400 uppercase">20 MCQ + 10 NAT Pattern</span>
+                      <span className="text-[9px] font-bold text-gray-400 uppercase">MCQ + NAT Pattern</span>
                     </div>
                     <input type="checkbox" checked={selectedSubjects.includes(sub)} onChange={() => handleSubjectToggle(sub)} className="w-6 h-6 accent-[#337ab7]" />
                   </label>
