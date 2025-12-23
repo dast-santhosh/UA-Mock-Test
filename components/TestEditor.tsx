@@ -1,7 +1,6 @@
 
 import React, { useState } from 'react';
 import { Exam, Question, QuestionType, QuestionDifficulty } from '../types';
-import { GoogleGenAI, Type } from "@google/genai";
 import LatexRenderer from './LatexRenderer';
 
 interface Props {
@@ -33,88 +32,85 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
     );
   };
 
+  // Helper for exponential backoff retries to handle OpenRouter rate limits or transient errors
+  const fetchWithRetry = async (fn: () => Promise<Response>, retries = 3, delay = 2000): Promise<Response> => {
+    const res = await fn();
+    if (res.status === 429 && retries > 0) {
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return fetchWithRetry(fn, retries - 1, delay * 2);
+    }
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.error?.message || `API Error: ${res.status}`);
+    }
+    return res;
+  };
+
   const generateAI = async () => {
     if (selectedSubjects.length === 0) return alert("Select at least one subject.");
     
-    // Check for API Key presence before initializing to prevent "An API Key must be set" error
+    // Using process.env.API_KEY as the centralized secret source
     const apiKey = process.env.API_KEY;
     if (!apiKey) {
-      alert("Critical Error: API_KEY is missing from the environment. Ensure you have configured it correctly in your deployment settings.");
+      alert("System Error: API_KEY environment variable is not defined.");
       return;
     }
 
     setIsGenerating(true);
     
     try {
-      // Re-initialize AI client with the verified key
-      const ai = new GoogleGenAI({ apiKey });
       let allQuestions: Question[] = [];
       let currentGlobalId = 1;
 
       for (const sub of selectedSubjects) {
-        const prompt = `Act as an elite JEE Main/Advanced Subject Matter Expert. Synthesize exactly 30 high-difficulty questions for ${sub}.
+        const prompt = `Act as an elite Subject Matter Expert for the NTA JEE Main Examination. 
+        Synthesize a rigorous set of exactly 30 questions for the subject: ${sub}.
         
-        CRITICAL SYLLABUS GUIDELINES:
-        - MATHEMATICS: Focus on Calculus (Definite Integrals, Differential Eq), Coordinate Geometry (Conics), and Vector Algebra.
-        - PHYSICS: Focus on Rotational Mechanics, Electrodynamics (Gauss Law, EMI), and Modern Physics.
-        - CHEMISTRY: Focus on Organic Synthesis Mechanisms, Coordination Chemistry, and Thermodynamics.
+        PATTERN REQUIREMENTS:
+        - SECTION A: 20 Multiple Choice Questions (Single Correct). 
+        - SECTION B: 10 Numerical Answer Types (NAT).
         
-        STRUCTURE PER SUBJECT:
-        1. SECTION A: 20 Multiple Choice Questions (Single Correct). 
-        2. SECTION B: 10 Numerical Answer Types (NAT).
+        SYLLABUS DEPTH:
+        - MATHEMATICS: Emphasize Calculus (Differential/Integral), Vectors, 3D Geometry, and Probability.
+        - PHYSICS: Focus on Mechanics, Electrodynamics, Modern Physics, and Thermodynamics.
+        - CHEMISTRY: Focus on Organic Synthesis Mechanisms, Chemical Bonding, and Equilibrium.
         
-        NEURAL OUTPUT RULES:
-        - LATEX: MANDATORY for ALL math/symbols. Use $ for inline, $$ for block. Example: $\\vec{E} = \\frac{1}{4\\pi\\epsilon_0} \\frac{q}{r^2} \\hat{r}$.
-        - DIFFICULTY: Strictly mix 20% EASY, 60% MEDIUM, 20% HARD per subject.
-        - NUMERICALS: For Section B, ensure the correctAnswer is a precise number (integer or decimal).
+        FORMATTING RULES:
+        - LATEX: Use LaTeX for ALL mathematical symbols, units, and equations ($ for inline, $$ for block).
+        - DIFFICULTY: Distribution of 20% Easy, 60% Medium, 20% Hard.
+        - OUTPUT: Strictly JSON.
         
-        RETURN JSON:
+        JSON SCHEMA:
         {
           "mcqs": [{"text": "...", "options": ["...", "...", "...", "..."], "correctAnswer": "0-3", "difficulty": "EASY|MEDIUM|HARD"}],
-          "nats": [{"text": "...", "correctAnswer": "numerical_string", "difficulty": "EASY|MEDIUM|HARD"}]
+          "nats": [{"text": "...", "correctAnswer": "numerical_value", "difficulty": "EASY|MEDIUM|HARD"}]
         }`;
 
-        const response = await ai.models.generateContent({
-          model: 'gemini-3-pro-preview',
-          contents: prompt,
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                mcqs: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      text: { type: Type.STRING },
-                      options: { type: Type.ARRAY, items: { type: Type.STRING } },
-                      correctAnswer: { type: Type.STRING },
-                      difficulty: { type: Type.STRING, enum: ["EASY", "MEDIUM", "HARD"] }
-                    },
-                    required: ["text", "options", "correctAnswer", "difficulty"]
-                  }
-                },
-                nats: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      text: { type: Type.STRING },
-                      correctAnswer: { type: Type.STRING },
-                      difficulty: { type: Type.STRING, enum: ["EASY", "MEDIUM", "HARD"] }
-                    },
-                    required: ["text", "correctAnswer", "difficulty"]
-                  }
-                }
-              }
-            }
-          }
-        });
+        const response = await fetchWithRetry(() => 
+          fetch("https://openrouter.ai/api/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+              "HTTP-Referer": window.location.origin,
+              "X-Title": "NTA Mock Test Architect",
+            },
+            body: JSON.stringify({
+              "model": "xiaomi/mimo-v2-flash:free",
+              "messages": [
+                { "role": "system", "content": "You are a specialized exam generator. Always output valid JSON." },
+                { "role": "user", "content": prompt }
+              ],
+              "response_format": { "type": "json_object" }
+            })
+          })
+        );
 
-        const data = JSON.parse(response.text || '{}');
+        const result = await response.json();
+        const content = result.choices[0].message.content;
+        const data = JSON.parse(content || '{}');
         
-        const subMcqs = (data.mcqs || []).slice(0, 20).map((q: any) => ({
+        const subMcqs = (data.mcqs || []).map((q: any) => ({
           ...q,
           id: currentGlobalId++,
           subject: sub as any,
@@ -122,7 +118,7 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
           section: 'A'
         }));
         
-        const subNats = (data.nats || []).slice(0, 10).map((q: any) => ({
+        const subNats = (data.nats || []).map((q: any) => ({
           ...q,
           id: currentGlobalId++,
           subject: sub as any,
@@ -134,12 +130,12 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
       }
 
       setQuestions(allQuestions);
-      setName(name || `JEE-MAIN Mock [${paperType}] - ${new Date().toLocaleDateString()}`);
+      setName(name || `JEE-MAIN Full Mock - ${new Date().toLocaleDateString('en-IN')}`);
       setShowAIModal(false);
-      alert(`Synthesis complete. ${allQuestions.length} professional-grade JEE items generated with LaTeX coverage.`);
-    } catch (e) {
-      console.error("AI Generation Error:", e);
-      alert("Neural synthesis failed. Please verify your API Key and internet connectivity.");
+      alert(`Successfully synthesized ${allQuestions.length} questions across ${selectedSubjects.length} subjects.`);
+    } catch (e: any) {
+      console.error("OpenRouter Synthesis Fault:", e);
+      alert(`Synthesis failed: ${e.message || "Unknown error"}. Please verify your API configuration.`);
     } finally {
       setIsGenerating(false);
     }
@@ -216,7 +212,7 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
               >
                 <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-[10px] shrink-0 font-black ${activeIdx === i ? 'bg-white/20' : 'bg-gray-100 text-gray-400'}`}>{q.id}</div>
                 <div className="flex flex-col">
-                    <span className="truncate w-[180px]">{q.subject}</span>
+                    <span className="truncate w-[180px] text-left">{q.subject}</span>
                     <span className={`text-[8px] font-black uppercase opacity-60 ${activeIdx === i ? 'text-white' : 'text-[#337ab7]'}`}>{q.difficulty} • Sect {q.section}</span>
                 </div>
               </button>

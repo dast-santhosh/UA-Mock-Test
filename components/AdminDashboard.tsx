@@ -22,6 +22,8 @@ const AdminDashboard: React.FC<Props> = ({
   const [newStudentRoll, setNewStudentRoll] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string, type: 'EXAM' | 'STUDENT' } | null>(null);
 
+  const isAiConfigured = !!process.env.API_KEY;
+
   const handleAddStudent = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newStudentName || !newStudentRoll) return;
@@ -58,6 +60,14 @@ const AdminDashboard: React.FC<Props> = ({
           <div className="flex flex-col leading-none">
             <span className="font-black text-xl tracking-tighter uppercase">APEX ADMIN</span>
             <span className="text-[9px] font-bold text-blue-300 uppercase tracking-widest">Portal V2.0</span>
+          </div>
+          
+          {/* AI Status Indicator */}
+          <div className={`ml-6 flex items-center gap-2 px-3 py-1 rounded-full border ${isAiConfigured ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-red-500/30 bg-red-500/10'}`}>
+            <div className={`w-1.5 h-1.5 rounded-full ${isAiConfigured ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`}></div>
+            <span className={`text-[8px] font-black uppercase tracking-widest ${isAiConfigured ? 'text-emerald-400' : 'text-red-400'}`}>
+              AI Synthesis: {isAiConfigured ? 'Active' : 'Missing API Key'}
+            </span>
           </div>
         </div>
         <div className="flex items-center gap-6">
