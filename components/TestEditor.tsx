@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { Exam, Question, QuestionType, QuestionDifficulty } from '../types';
 import { GoogleGenAI, Type } from "@google/genai";
@@ -37,9 +36,9 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
 
   const generateWithRetry = async (ai: any, prompt: string, retries = 5): Promise<any> => {
     try {
-      // Use gemini-3-flash-preview as the primary fast/free-tier model for text/STEM tasks
+      // Switched to gemini-2.5-flash as per user preference
       const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
+        model: 'gemini-2.5-flash',
         contents: prompt,
         config: {
           systemInstruction: "You are an elite NTA JEE Main subject matter expert. Generate scientifically accurate and challenging mock test questions in JSON format. ALWAYS use LaTeX for math, units, and chemical formulas ($ for inline, $$ for block). Ensure options are distinct and plausible.",
@@ -79,10 +78,10 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
       });
       return JSON.parse(response.text || '{}');
     } catch (error: any) {
-      // Handle 429 Too Many Requests with exponential backoff
+      // Enhanced error handling for 429/Rate limits with exponential backoff
       if ((error.message?.includes('429') || error.status === 429) && retries > 0) {
-        const waitTime = Math.pow(2, 6 - retries) * 2000;
-        console.warn(`Rate limit hit. Waiting ${waitTime}ms before retry ${6 - retries}...`);
+        const waitTime = Math.pow(2, 6 - retries) * 2000 + Math.random() * 1000;
+        console.warn(`Quota reached. Retrying in ${Math.round(waitTime)}ms using gemini-2.5-flash...`);
         await delay(waitTime);
         return generateWithRetry(ai, prompt, retries - 1);
       }
@@ -99,9 +98,9 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
       let allQuestions: Question[] = [];
       let currentGlobalId = 1;
 
-      // Process subjects one by one to avoid hitting concurrency limits on the free tier
+      // Sequential generation to respect free tier concurrency limits
       for (const sub of selectedSubjects) {
-        const prompt = `SUBJECT: ${sub}. Generate a JEE Main Mock set with exactly 6 MCQs and 4 Numerical Value Questions. Use LaTeX ($...$) for all math/chemical formulas. Difficulty: 2 EASY, 4 MEDIUM, 4 HARD.`;
+        const prompt = `SUBJECT: ${sub}. Generate a JEE Main Mock set with exactly 6 MCQs and 4 Numerical Value Questions. Use LaTeX ($...$) for all math/chemical formulas.`;
         
         const data = await generateWithRetry(ai, prompt);
         
@@ -123,18 +122,18 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
 
         allQuestions = [...allQuestions, ...subMcqs, ...subNats];
         
-        // Add a deliberate cool-down delay between subject generations
+        // Cooldown between subject calls
         if (selectedSubjects.indexOf(sub) < selectedSubjects.length - 1) {
-          await delay(4000); 
+          await delay(5000); 
         }
       }
 
       setQuestions(allQuestions);
-      setName(name || `NTA JEE Mock - ${new Date().toLocaleDateString()}`);
+      setName(name || `NTA Mock Exam - ${new Date().toLocaleDateString()}`);
       setShowAIModal(false);
     } catch (e: any) {
-      console.error("AI Generation Failed:", e);
-      alert(`Synthesis Error: ${e.message}. The system is under heavy load, please try in a minute.`);
+      console.error("AI Generation Error:", e);
+      alert(`The synthesis engine is currently handling high traffic. Please try again in 30 seconds.`);
     } finally {
       setIsGenerating(false);
     }
@@ -166,7 +165,7 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
           </button>
           <div className="flex flex-col">
             <span className="text-[10px] font-black text-blue-300 uppercase tracking-widest leading-none mb-1">Architecture Portal</span>
-            <span className="font-black text-xl uppercase tracking-tighter tracking-widest">Mock Architect</span>
+            <span className="font-black text-xl uppercase tracking-tighter">Mock Architect</span>
           </div>
         </div>
         
@@ -175,7 +174,7 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
             onClick={() => setShowAIModal(true)}
             className="bg-[#9c27b0] hover:bg-[#7b1fa2] text-white px-6 py-2 rounded text-[11px] font-black uppercase shadow-lg flex items-center gap-2 transition-all active:scale-95 border-b-4 border-purple-900"
           >
-            ⚡ AI Generative Tool
+            ⚡ Experimental Synthesis
           </button>
           <button 
             onClick={() => {
@@ -184,7 +183,7 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
             }}
             className="bg-[#5cb85c] hover:bg-[#449d44] text-white px-8 py-2 rounded text-[11px] font-black uppercase shadow-lg transition-all active:scale-95 border-b-4 border-green-700"
           >
-            Save & Publish
+            Deploy Assessment
           </button>
         </div>
       </header>
@@ -194,7 +193,7 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
           <div className="p-6 border-b space-y-4 bg-gray-50/50">
             <div>
               <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Internal Title</label>
-              <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. JEE Main Phase 2" className="w-full border-2 p-3 text-xs font-bold rounded-xl outline-none focus:border-blue-500 shadow-sm" />
+              <input value={name} onChange={e => setName(e.target.value)} placeholder="Exam Name" className="w-full border-2 p-3 text-xs font-bold rounded-xl outline-none focus:border-blue-500 shadow-sm" />
             </div>
             <div>
               <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Duration (Min)</label>
@@ -243,11 +242,11 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
                     value={currentQ.text}
                     onChange={e => updateQuestion({ text: e.target.value })}
                     className="w-full border-2 border-gray-100 p-6 rounded-2xl focus:border-[#337ab7] outline-none min-h-[300px] font-mono text-sm shadow-inner"
-                    placeholder="Input question statement..."
+                    placeholder="Input statement..."
                   />
                 </div>
                 <div className="space-y-4">
-                  <label className="block text-[11px] font-black text-gray-400 uppercase tracking-widest">Rendered Output</label>
+                  <label className="block text-[11px] font-black text-gray-400 uppercase tracking-widest">Render Preview</label>
                   <div className="w-full bg-gray-50 p-8 rounded-3xl border-2 border-dashed border-gray-200 min-h-[300px] overflow-auto">
                     <LatexRenderer content={currentQ.text} className="text-xl text-gray-800" />
                   </div>
@@ -284,7 +283,7 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
 
               {currentQ.type === QuestionType.NAT && (
                 <div className="space-y-6 pt-8 border-t border-gray-50">
-                  <label className="block text-[11px] font-black text-gray-400 uppercase tracking-widest">Numerical Value Key</label>
+                  <label className="block text-[11px] font-black text-gray-400 uppercase tracking-widest">Numerical Key</label>
                   <input 
                     value={currentQ.correctAnswer} 
                     onChange={e => updateQuestion({ correctAnswer: e.target.value })} 
@@ -296,7 +295,7 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
             </div>
           ) : (
             <div className="h-full flex flex-col items-center justify-center opacity-30 select-none grayscale">
-               <h3 className="text-2xl font-black text-[#0b3c66] uppercase tracking-[0.5em]">Question Designer</h3>
+               <h3 className="text-2xl font-black text-[#0b3c66] uppercase tracking-[0.5em]">Designer Canvas</h3>
             </div>
           )}
         </main>
@@ -306,14 +305,14 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#0b3c66]/90 backdrop-blur-md p-6">
           <div className="bg-white w-full max-w-lg rounded-[2.5rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300 flex flex-col max-h-[90vh]">
             <div className="bg-[#337ab7] p-8 text-white flex justify-between items-center shrink-0">
-              <h3 className="font-black text-2xl uppercase tracking-tighter">AI Synthesis</h3>
+              <h3 className="font-black text-2xl uppercase tracking-tighter">Neural Synthesis</h3>
               <button onClick={() => setShowAIModal(false)} className="bg-white/10 hover:bg-white/20 p-3 rounded-full text-2xl leading-none">×</button>
             </div>
             
             <div className="p-10 space-y-8 overflow-y-auto custom-scrollbar">
               <div className="grid grid-cols-2 gap-4">
-                <button onClick={() => setPaperType('PAPER_1')} className={`p-5 rounded-3xl border-2 transition-all font-bold uppercase text-[10px] tracking-widest ${paperType === 'PAPER_1' ? 'border-[#337ab7] bg-blue-50 shadow-md text-[#337ab7]' : 'border-gray-100 text-gray-400'}`}>Engineering (B.E.)</button>
-                <button onClick={() => setPaperType('PAPER_2')} className={`p-5 rounded-3xl border-2 transition-all font-bold uppercase text-[10px] tracking-widest ${paperType === 'PAPER_2' ? 'border-[#337ab7] bg-blue-50 shadow-md text-[#337ab7]' : 'border-gray-100 text-gray-400'}`}>Architecture (B.Arch)</button>
+                <button onClick={() => setPaperType('PAPER_1')} className={`p-5 rounded-3xl border-2 transition-all font-bold uppercase text-[10px] tracking-widest ${paperType === 'PAPER_1' ? 'border-[#337ab7] bg-blue-50 shadow-md text-[#337ab7]' : 'border-gray-100 text-gray-400'}`}>Engineering (Paper 1)</button>
+                <button onClick={() => setPaperType('PAPER_2')} className={`p-5 rounded-3xl border-2 transition-all font-bold uppercase text-[10px] tracking-widest ${paperType === 'PAPER_2' ? 'border-[#337ab7] bg-blue-50 shadow-md text-[#337ab7]' : 'border-gray-100 text-gray-400'}`}>Architecture (Paper 2)</button>
               </div>
 
               <div className="grid grid-cols-1 gap-3">
@@ -321,7 +320,7 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
                   <label key={sub} className="flex items-center justify-between p-5 bg-gray-50 rounded-2xl cursor-pointer hover:bg-white transition-all border-2 border-transparent has-[:checked]:border-[#337ab7] has-[:checked]:bg-blue-50">
                     <div className="flex flex-col">
                       <span className="text-sm font-black text-[#0b3c66]">{sub}</span>
-                      <span className="text-[9px] font-bold text-gray-400 uppercase">NTA Pattern Mock</span>
+                      <span className="text-[9px] font-bold text-gray-400 uppercase">Subject Synthesis</span>
                     </div>
                     <input type="checkbox" checked={selectedSubjects.includes(sub)} onChange={() => handleSubjectToggle(sub)} className="w-6 h-6 accent-[#337ab7]" />
                   </label>
@@ -334,11 +333,11 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
                     <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
                     Synthesizing...
                   </div>
-                ) : 'Synthesize Mock Exam'}
+                ) : 'Launch Synthesis'}
               </button>
               
               <p className="text-[8px] font-bold text-gray-400 uppercase text-center leading-relaxed">
-                Uses experimental free-tier intelligence. Sequential processing enabled for high stability.
+                Powered by Experimental Intelligence. Batch processing enabled for reliability.
               </p>
             </div>
           </div>
