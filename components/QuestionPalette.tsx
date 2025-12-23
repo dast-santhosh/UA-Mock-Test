@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { Question, QuestionStatus, QuestionState, Student } from '../types';
 import { 
@@ -38,10 +37,10 @@ const QuestionPalette: React.FC<Props> = ({ questions, questionStates, currentIn
 
   const counts = getCounts();
 
-  const renderShape = (qId: number, isSummary = false) => {
+  const renderShape = (qId: number, statusOverride?: QuestionStatus) => {
     const state = questionStates[qId];
-    const status = state?.status || QuestionStatus.NOT_VISITED;
-    const label = isSummary ? counts[status] : qId.toString().padStart(2, '0');
+    const status = statusOverride || state?.status || QuestionStatus.NOT_VISITED;
+    const label = statusOverride ? counts[status] : qId.toString();
 
     switch (status) {
       case QuestionStatus.ANSWERED: return <AnsweredShape label={label} />;
@@ -54,57 +53,58 @@ const QuestionPalette: React.FC<Props> = ({ questions, questionStates, currentIn
 
   return (
     <div className="flex flex-col h-full bg-[#f2f2f2] border-l border-[#ddd] overflow-hidden">
-      {/* Profile Info */}
+      {/* Candidate Profile Area */}
       <div className="p-4 bg-white border-b border-[#ddd] flex items-center gap-4">
-        <div className="w-20 h-24 bg-gray-100 border border-gray-300 flex items-center justify-center shrink-0">
-          <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${student?.name || 'Candidate'}`} className="w-full h-full object-cover" alt="Profile" />
+        <div className="w-16 h-20 bg-gray-100 border border-gray-300 flex items-center justify-center shrink-0 overflow-hidden">
+          <img src={`https://api.dicebear.com/7.x/initials/svg?seed=${student?.name || 'C'}`} className="w-full h-full object-cover" alt="Profile" />
         </div>
-        <div className="flex flex-col overflow-hidden">
-          <span className="text-[12px] font-black text-[#0b3c66] truncate uppercase">{student?.name || "Guest Candidate"}</span>
-          <span className="text-[10px] font-bold text-gray-500 uppercase mt-2">Roll No:</span>
-          <span className="text-[12px] font-black text-gray-700">{student?.rollNumber || "NTA-0000"}</span>
+        <div className="flex flex-col min-w-0">
+          <span className="text-[10px] font-bold text-gray-400 uppercase leading-none mb-1">Candidate Name:</span>
+          <span className="text-[12px] font-black text-[#0b3c66] truncate uppercase mb-2">{student?.name || "GUEST"}</span>
+          <span className="text-[10px] font-bold text-gray-400 uppercase leading-none mb-1">Subject Name:</span>
+          <span className="text-[11px] font-black text-gray-700 truncate uppercase">JEE Main Mock</span>
         </div>
       </div>
 
-      {/* Legend Area */}
-      <div className="p-4 bg-white border-b border-[#ddd]">
-        <div className="grid grid-cols-2 gap-y-3">
+      {/* Official Status Legend */}
+      <div className="p-4 bg-white border-b border-[#ddd] overflow-y-auto max-h-[160px] custom-scrollbar">
+        <div className="grid grid-cols-2 gap-x-2 gap-y-3">
           <div className="flex items-center gap-2">
             <AnsweredShape label={counts[QuestionStatus.ANSWERED]} className="scale-75 origin-center" />
-            <span className="text-[11px] font-bold text-gray-600">Answered</span>
+            <span className="text-[10px] font-bold text-gray-600 leading-none">Answered</span>
           </div>
           <div className="flex items-center gap-2">
             <NotAnsweredShape label={counts[QuestionStatus.NOT_ANSWERED]} className="scale-75 origin-center" />
-            <span className="text-[11px] font-bold text-gray-600">Not Answered</span>
+            <span className="text-[10px] font-bold text-gray-600 leading-none">Not Answered</span>
           </div>
           <div className="flex items-center gap-2">
             <NotVisitedShape label={counts[QuestionStatus.NOT_VISITED]} className="scale-75 origin-center" />
-            <span className="text-[11px] font-bold text-gray-600">Not Visited</span>
+            <span className="text-[10px] font-bold text-gray-600 leading-none">Not Visited</span>
           </div>
           <div className="flex items-center gap-2">
             <MarkedForReviewShape label={counts[QuestionStatus.MARKED_FOR_REVIEW]} className="scale-75 origin-center" />
-            <span className="text-[11px] font-bold text-gray-600">Marked for Review</span>
+            <span className="text-[10px] font-bold text-gray-600 leading-none">Marked for Review</span>
           </div>
         </div>
-        <div className="mt-3 flex items-center gap-2">
-          <AnsweredMarkedShape label={counts[QuestionStatus.ANSWERED_AND_MARKED_FOR_REVIEW]} className="scale-75 origin-center" />
-          <span className="text-[10px] font-bold text-gray-500 leading-tight">Answered & Marked for Review (will be considered for evaluation)</span>
+        <div className="mt-4 flex items-start gap-2">
+          <AnsweredMarkedShape label={counts[QuestionStatus.ANSWERED_AND_MARKED_FOR_REVIEW]} className="scale-75 origin-top shrink-0" />
+          <span className="text-[9px] font-bold text-gray-500 leading-tight">Answered & Marked for Review (will be considered for evaluation)</span>
         </div>
       </div>
 
-      {/* Palette Label */}
+      {/* Palette Title */}
       <div className="bg-[#337ab7] text-white text-[11px] font-bold py-1 px-4 uppercase shrink-0">
         Question Palette
       </div>
 
-      {/* Question Grid */}
+      {/* Grid of Questions */}
       <div className="flex-1 overflow-y-auto p-4 bg-white custom-scrollbar">
-        <div className="grid grid-cols-4 lg:grid-cols-5 gap-3 justify-items-center">
+        <div className="grid grid-cols-4 sm:grid-cols-5 gap-3 justify-items-center">
           {questions.map((q, idx) => (
             <button 
                 key={q.id} 
                 onClick={() => onSelect(idx)}
-                className={`transition-all outline-none ${currentIndex === idx ? 'ring-2 ring-[#337ab7] ring-offset-2 rounded-sm' : ''}`}
+                className={`transition-all outline-none rounded-sm ${currentIndex === idx ? 'ring-2 ring-orange-500 ring-offset-2' : ''}`}
             >
               {renderShape(q.id)}
             </button>
@@ -112,18 +112,18 @@ const QuestionPalette: React.FC<Props> = ({ questions, questionStates, currentIn
         </div>
       </div>
 
-      {/* Final Sidebar Footer */}
-      <div className="p-4 bg-white border-t border-[#ddd] mt-auto">
-         <div className="grid grid-cols-1 gap-2">
-            <button className="w-full bg-[#f2f2f2] border border-[#ccc] py-1.5 text-[11px] font-bold text-gray-700 hover:bg-gray-100 uppercase">Question Paper</button>
-            <button className="w-full bg-[#f2f2f2] border border-[#ccc] py-1.5 text-[11px] font-bold text-gray-700 hover:bg-gray-100 uppercase">Instructions</button>
-            <button 
-              onClick={onSubmit}
-              className="w-full bg-[#337ab7] hover:bg-[#286090] text-white py-3 mt-2 text-[13px] font-black uppercase rounded shadow-md transition-all active:scale-95"
-            >
-              Submit
-            </button>
-         </div>
+      {/* Bottom Action Bar */}
+      <div className="p-3 bg-[#e5f1fa] border-t border-[#ddd] flex flex-col gap-2">
+        <div className="grid grid-cols-2 gap-2">
+            <button className="bg-white border border-[#ccc] py-1.5 text-[10px] font-bold text-gray-700 hover:bg-gray-50 uppercase shadow-sm">Question Paper</button>
+            <button className="bg-white border border-[#ccc] py-1.5 text-[10px] font-bold text-gray-700 hover:bg-gray-50 uppercase shadow-sm">Instructions</button>
+        </div>
+        <button 
+          onClick={onSubmit}
+          className="w-full bg-[#337ab7] hover:bg-[#286090] text-white py-2.5 text-[13px] font-black uppercase rounded shadow-md transition-all active:scale-95 mt-1"
+        >
+          Submit
+        </button>
       </div>
     </div>
   );
