@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { Exam, Question, QuestionType, QuestionDifficulty } from '../types';
-import { GoogleGenAI, Type } from "@google/genai";
 import LatexRenderer from './LatexRenderer';
 
 interface Props {
@@ -11,6 +10,10 @@ interface Props {
 
 type PaperType = 'PAPER_1' | 'PAPER_2';
 
+// OpenRouter Configuration
+const OPENROUTER_API_KEY = "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";
+const OPENROUTER_MODEL = "xiaomi/mimo-v2-flash:free";
+
 const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
   const [name, setName] = useState(exam?.name || '');
   const [duration, setDuration] = useState(exam?.durationMinutes || 180);
@@ -19,6 +22,7 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
   
   const [showAIModal, setShowAIModal] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [generationStatus, setGenerationStatus] = useState("");
   const [paperType, setPaperType] = useState<PaperType>('PAPER_1');
   const [selectedSubjects, setSelectedSubjects] = useState<string[]>(['Physics', 'Chemistry', 'Mathematics']);
 
@@ -34,56 +38,48 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
 
   const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
-  const generateWithRetry = async (ai: any, prompt: string, retries = 5): Promise<any> => {
+  const fetchBatch = async (prompt: string, retries = 3): Promise<any> => {
     try {
-      // Switched to gemini-2.5-flash as per user preference
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          systemInstruction: "You are an elite NTA JEE Main subject matter expert. Generate scientifically accurate and challenging mock test questions in JSON format. ALWAYS use LaTeX for math, units, and chemical formulas ($ for inline, $$ for block). Ensure options are distinct and plausible.",
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              mcqs: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    text: { type: Type.STRING },
-                    options: { type: Type.ARRAY, items: { type: Type.STRING }, minItems: 4, maxItems: 4 },
-                    correctAnswer: { type: Type.STRING },
-                    difficulty: { type: Type.STRING, enum: ["EASY", "MEDIUM", "HARD"] }
-                  },
-                  required: ["text", "options", "correctAnswer", "difficulty"]
-                }
-              },
-              nats: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    text: { type: Type.STRING },
-                    correctAnswer: { type: Type.STRING },
-                    difficulty: { type: Type.STRING, enum: ["EASY", "MEDIUM", "HARD"] }
-                  },
-                  required: ["text", "correctAnswer", "difficulty"]
-                }
-              }
+      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": window.location.origin,
+          "X-Title": "Apex JEE Mock Architect"
+        },
+        body: JSON.stringify({
+          model: OPENROUTER_MODEL,
+          messages: [
+            {
+              role: "system",
+              content: `You are an expert NTA JEE Main exam creator. 
+              Generate high-quality, scientifically accurate questions. 
+              Always use LaTeX for math/formulas ($ for inline, $$ for block).
+              Return ONLY valid JSON. 
+              JSON Schema: { "questions": [ { "text": "...", "options": ["A", "B", "C", "D"], "correctAnswer": "0", "difficulty": "MEDIUM", "type": "MCQ" } ] }.
+              For MCQ: correctAnswer must be a string "0", "1", "2", or "3". 
+              For NAT: correctAnswer must be a numeric string.`
             },
-            required: ["mcqs", "nats"]
-          }
-        }
+            { role: "user", content: prompt }
+          ],
+          response_format: { type: "json_object" }
+        })
       });
-      return JSON.parse(response.text || '{}');
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData?.error?.message || `API Error: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      const content = data.choices[0]?.message?.content;
+      return JSON.parse(content || '{"questions":[]}');
     } catch (error: any) {
-      // Enhanced error handling for 429/Rate limits with exponential backoff
-      if ((error.message?.includes('429') || error.status === 429) && retries > 0) {
-        const waitTime = Math.pow(2, 6 - retries) * 2000 + Math.random() * 1000;
-        console.warn(`Quota reached. Retrying in ${Math.round(waitTime)}ms using gemini-2.5-flash...`);
-        await delay(waitTime);
-        return generateWithRetry(ai, prompt, retries - 1);
+      if (retries > 0) {
+        console.warn(`Batch failed, retrying... (${retries} left)`, error);
+        await delay(3000);
+        return fetchBatch(prompt, retries - 1);
       }
       throw error;
     }
@@ -93,49 +89,55 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
     if (selectedSubjects.length === 0) return alert("Please select at least one subject.");
     
     setIsGenerating(true);
+    let allQuestions: Question[] = [];
+    let currentGlobalId = 1;
+
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
-      let allQuestions: Question[] = [];
-      let currentGlobalId = 1;
-
-      // Sequential generation to respect free tier concurrency limits
       for (const sub of selectedSubjects) {
-        const prompt = `SUBJECT: ${sub}. Generate a JEE Main Mock set with exactly 6 MCQs and 4 Numerical Value Questions. Use LaTeX ($...$) for all math/chemical formulas.`;
+        // NTA JEE Requirement: 30 questions per subject
+        // 20 MCQs (Section A) + 10 NATs (Section B)
+        // We split into 3 batches of 10 to ensure JSON reliability and context limits
         
-        const data = await generateWithRetry(ai, prompt);
-        
-        const subMcqs = (data.mcqs || []).map((q: any) => ({
-          ...q,
-          id: currentGlobalId++,
-          subject: sub as any,
-          type: QuestionType.MCQ,
-          section: 'A'
-        }));
-        
-        const subNats = (data.nats || []).map((q: any) => ({
-          ...q,
-          id: currentGlobalId++,
-          subject: sub as any,
-          type: QuestionType.NAT,
-          section: 'B'
-        }));
+        const subBatches = [
+          { type: 'MCQ', count: 10, section: 'A' as const, label: "Batch 1/3 (10 MCQs)" },
+          { type: 'MCQ', count: 10, section: 'A' as const, label: "Batch 2/3 (10 MCQs)" },
+          { type: 'NAT', count: 10, section: 'B' as const, label: "Batch 3/3 (10 NATs)" }
+        ];
 
-        allQuestions = [...allQuestions, ...subMcqs, ...subNats];
-        
-        // Cooldown between subject calls
-        if (selectedSubjects.indexOf(sub) < selectedSubjects.length - 1) {
-          await delay(5000); 
+        for (const batch of subBatches) {
+          setGenerationStatus(`Synthesizing ${sub}: ${batch.label}...`);
+          
+          const prompt = `Generate exactly 10 original ${batch.type} questions for JEE Main level ${sub}. 
+          Current Batch: ${batch.label}. 
+          Difficulty: Balanced mix of EASY, MEDIUM, HARD.
+          Instructions: Rigorous concepts, no duplicates. Use LaTeX for formulas.`;
+
+          const data = await fetchBatch(prompt);
+          const batchQs = (data.questions || []).map((q: any) => ({
+            ...q,
+            id: currentGlobalId++,
+            subject: sub as any,
+            type: q.type === 'NAT' || batch.type === 'NAT' ? QuestionType.NAT : QuestionType.MCQ,
+            section: batch.section,
+            difficulty: q.difficulty as QuestionDifficulty || QuestionDifficulty.MEDIUM
+          }));
+
+          allQuestions = [...allQuestions, ...batchQs];
+          await delay(2000); // Small delay to prevent burst throttling on free models
         }
       }
 
+      if (allQuestions.length === 0) throw new Error("No questions were generated. Check API status.");
+
       setQuestions(allQuestions);
-      setName(name || `NTA Mock Exam - ${new Date().toLocaleDateString()}`);
+      setName(name || `JEE Ultra Mock - ${new Date().toLocaleDateString()}`);
       setShowAIModal(false);
     } catch (e: any) {
-      console.error("AI Generation Error:", e);
-      alert(`The synthesis engine is currently handling high traffic. Please try again in 30 seconds.`);
+      console.error("Synthesis Failure:", e);
+      alert(`Synthesis Interrupted: ${e.message}. Try reducing selected subjects.`);
     } finally {
       setIsGenerating(false);
+      setGenerationStatus("");
     }
   };
 
@@ -174,7 +176,7 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
             onClick={() => setShowAIModal(true)}
             className="bg-[#9c27b0] hover:bg-[#7b1fa2] text-white px-6 py-2 rounded text-[11px] font-black uppercase shadow-lg flex items-center gap-2 transition-all active:scale-95 border-b-4 border-purple-900"
           >
-            ⚡ Experimental Synthesis
+            ⚡ OpenRouter Synthesis
           </button>
           <button 
             onClick={() => {
@@ -305,7 +307,7 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#0b3c66]/90 backdrop-blur-md p-6">
           <div className="bg-white w-full max-w-lg rounded-[2.5rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300 flex flex-col max-h-[90vh]">
             <div className="bg-[#337ab7] p-8 text-white flex justify-between items-center shrink-0">
-              <h3 className="font-black text-2xl uppercase tracking-tighter">Neural Synthesis</h3>
+              <h3 className="font-black text-2xl uppercase tracking-tighter">AI Synthesis (Mimo-v2)</h3>
               <button onClick={() => setShowAIModal(false)} className="bg-white/10 hover:bg-white/20 p-3 rounded-full text-2xl leading-none">×</button>
             </div>
             
@@ -320,24 +322,32 @@ const TestEditor: React.FC<Props> = ({ exam, onCancel, onSave }) => {
                   <label key={sub} className="flex items-center justify-between p-5 bg-gray-50 rounded-2xl cursor-pointer hover:bg-white transition-all border-2 border-transparent has-[:checked]:border-[#337ab7] has-[:checked]:bg-blue-50">
                     <div className="flex flex-col">
                       <span className="text-sm font-black text-[#0b3c66]">{sub}</span>
-                      <span className="text-[9px] font-bold text-gray-400 uppercase">Subject Synthesis</span>
+                      <span className="text-[9px] font-bold text-gray-400 uppercase">30 Question Batch</span>
                     </div>
                     <input type="checkbox" checked={selectedSubjects.includes(sub)} onChange={() => handleSubjectToggle(sub)} className="w-6 h-6 accent-[#337ab7]" />
                   </label>
                 ))}
               </div>
 
-              <button onClick={generateAI} disabled={isGenerating} className={`w-full py-6 rounded-3xl text-white font-black uppercase tracking-[0.2em] shadow-2xl transition-all ${isGenerating ? 'bg-gray-400 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-700'}`}>
-                {isGenerating ? (
-                  <div className="flex items-center justify-center gap-4">
-                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                    Synthesizing...
+              <div className="space-y-4">
+                <button onClick={generateAI} disabled={isGenerating} className={`w-full py-6 rounded-3xl text-white font-black uppercase tracking-[0.2em] shadow-2xl transition-all ${isGenerating ? 'bg-gray-400 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-700'}`}>
+                  {isGenerating ? (
+                    <div className="flex items-center justify-center gap-4">
+                      <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      Generating...
+                    </div>
+                  ) : 'Launch Synthesis'}
+                </button>
+                
+                {generationStatus && (
+                  <div className="text-center animate-pulse">
+                    <p className="text-[10px] font-black text-[#337ab7] uppercase tracking-widest">{generationStatus}</p>
                   </div>
-                ) : 'Launch Synthesis'}
-              </button>
+                )}
+              </div>
               
               <p className="text-[8px] font-bold text-gray-400 uppercase text-center leading-relaxed">
-                Powered by Experimental Intelligence. Batch processing enabled for reliability.
+                Powered by OpenRouter xiaomi/mimo-v2-flash:free. Generating 30 questions per subject (90 total for PCM).
               </p>
             </div>
           </div>
